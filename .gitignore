@@ -1,0 +1,8 @@
+.env
+bin/
+obj/
+*.user
+.vs/
+*.log
+*.err
+*.pid

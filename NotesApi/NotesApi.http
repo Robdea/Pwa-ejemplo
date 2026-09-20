@@ -1,0 +1,36 @@
+@NotesApi_HostAddress = http://localhost:5000
+
+GET {{NotesApi_HostAddress}}/api/health
+Accept: application/json
+
+###
+
+GET {{NotesApi_HostAddress}}/api/notes
+Accept: application/json
+
+###
+
+POST {{NotesApi_HostAddress}}/api/notes
+Content-Type: application/json
+
+{
+  "id": "3b241101-e2bb-4255-8caf-4136c566a962",
+  "title": "Mi nota",
+  "text": "Contenido"
+}
+
+###
+
+POST {{NotesApi_HostAddress}}/api/notes/sync
+Content-Type: application/json
+
+{
+  "notes": [
+    {
+      "id": "3b241101-e2bb-4255-8caf-4136c566a962",
+      "title": "Mi nota",
+      "text": "Contenido"
+    }
+  ],
+  "deletedIds": []
+}

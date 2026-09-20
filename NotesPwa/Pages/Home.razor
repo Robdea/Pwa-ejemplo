@@ -1,0 +1,234 @@
+﻿@page "/"
+@using NotesPwa.Models
+@using Microsoft.Extensions.Configuration
+@inject IJSRuntime JS
+@inject IConfiguration Config
+@inject NoteService NotesService
+@inject SyncService SyncService
+@implements IAsyncDisposable
+
+<header class="topbar">
+    <h1>Notas</h1>
+    <div class="status">
+        <span class="badge @(_navigatorOnline ? "badge-online" : "badge-offline")">Estado: @(_navigatorOnline ? "Online" : "Offline")</span>
+        <span>Modo: @(SyncService.IsOnline ? "Servidor" : "Local")</span>
+        <span>Notas: @NotesService.Notes.Count</span>
+    </div>
+</header>
+
+<div class="actions">
+    <button class="btn btn-primary" @onclick="ShowNewNote">Nueva nota</button>
+</div>
+
+<div class="syncbar">
+    <span>@SyncService.Status</span>
+    @if (SyncService.IsSyncing)
+    {
+        <span class="syncing">· Sincronizando…</span>
+    }
+    @if (SyncService.HasPendingChanges && !SyncService.IsOnline)
+    {
+        <span class="pending">· Cambios pendientes de sincronizar</span>
+    }
+</div>
+
+@if (_message is not null)
+{
+    <div class="message @(_messageIsError ? "message-error" : "message-info")">@_message</div>
+}
+
+<div class="note-list">
+    @if (NotesService.Notes.Count == 0)
+    {
+        <p class="empty">No hay notas. Pulsa "Nueva nota" para crear la primera.</p>
+    }
+
+    @foreach (var note in NotesService.Notes)
+    {
+        <div class="note-card">
+            <h3>@note.Title</h3>
+            <p>@note.Text</p>
+            <div>
+                <button class="btn" @onclick="() => StartEdit(note)">Editar</button>
+                <button class="btn btn-danger" @onclick="() => DeleteNote(note.Id)">Eliminar</button>
+            </div>
+        </div>
+    }
+</div>
+
+@if (_formVisible)
+{
+    <div class="form">
+        <h2>@(_editingNote is null ? "Nueva nota" : "Editar nota")</h2>
+
+        <label for="title">Título:</label>
+        <input id="title" @bind="_title" placeholder="Título" />
+
+        <label for="text">Texto:</label>
+        <textarea id="text" @bind="_text" rows="3" placeholder="Texto"></textarea>
+
+        <div>
+            <button class="btn btn-primary" @onclick="Save">Guardar</button>
+            <button class="btn" @onclick="CancelForm">Cancelar</button>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _navigatorOnline = true;
+    private bool _formVisible;
+    private bool _disposed;
+    private string _title = "";
+    private string _text = "";
+    private Note? _editingNote;
+    private string? _message;
+    private bool _messageIsError;
+    private IJSObjectReference? _connectionModule;
+    private DotNetObjectReference<Home>? _dotNetRef;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _dotNetRef = DotNetObjectReference.Create(this);
+        SyncService.StateChanged += OnSyncStateChanged;
+
+        try
+        {
+            await SyncService.InitializeAsync();
+
+            var apiBaseUrl = Config["ApiBaseUrl"] ?? "http://localhost:5000";
+            _connectionModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/connection.js");
+            await _connectionModule.InvokeVoidAsync("initConnectionStatus", _dotNetRef);
+            await _connectionModule.InvokeVoidAsync("initServerWatch", _dotNetRef, apiBaseUrl, 3000);
+        }
+        catch (Exception ex)
+        {
+            _message = $"Error de arranque: {ex.Message}";
+            _messageIsError = true;
+        }
+    }
+
+    [JSInvokable]
+    public void OnConnectionChanged(bool online)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _navigatorOnline = online;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnServerReachable(bool reachable)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        await SyncService.SetServerReachableAsync(reachable);
+        StateHasChanged();
+    }
+
+    private void ShowNewNote()
+    {
+        _editingNote = null;
+        _title = "";
+        _text = "";
+        _formVisible = true;
+        _message = null;
+    }
+
+    private void StartEdit(Note note)
+    {
+        _editingNote = note;
+        _title = note.Title;
+        _text = note.Text;
+        _formVisible = true;
+        _message = null;
+    }
+
+    private void CancelForm()
+    {
+        _formVisible = false;
+        _editingNote = null;
+    }
+
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(_title))
+        {
+            ShowError("El título es obligatorio.");
+            return;
+        }
+
+        var wasEditing = _editingNote is not null;
+        if (wasEditing)
+        {
+            _editingNote!.Title = _title.Trim();
+            _editingNote!.Text = _text.Trim();
+            await SyncService.UpdateAsync(_editingNote);
+        }
+        else
+        {
+            await SyncService.AddAsync(_title, _text);
+        }
+
+        _formVisible = false;
+        _editingNote = null;
+        ShowInfo(wasEditing ? "Nota actualizada." : "Nota creada.");
+    }
+
+    private async Task DeleteNote(Guid id)
+    {
+        await SyncService.DeleteAsync(id);
+        ShowInfo("Nota eliminada.");
+    }
+
+    private void OnSyncStateChanged()
+    {
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private void ShowInfo(string text)
+    {
+        _message = text;
+        _messageIsError = false;
+    }
+
+    private void ShowError(string text)
+    {
+        _message = text;
+        _messageIsError = true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        SyncService.StateChanged -= OnSyncStateChanged;
+
+        if (_connectionModule is not null)
+        {
+            try
+            {
+                await _connectionModule.InvokeVoidAsync("stopServerWatch");
+                await _connectionModule.DisposeAsync();
+            }
+            catch
+            {
+                // Navegación/cierre en curso: no importa limpiar.
+            }
+        }
+
+        _dotNetRef?.Dispose();
+    }
+}
