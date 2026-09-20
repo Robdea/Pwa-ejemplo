@@ -1,71 +1,61 @@
-# Notas Demo
+﻿# NotesDemo — Blazor WASM PWA + ASP.NET Core API + PostgreSQL
 
-Aplicación pequeña para aprender cómo funciona una **PWA** con Blazor WebAssembly y sincronización con un servidor.
+App de notas tipo Blazor WebAssembly PWA, con una API .NET que publica la PWA
+**en el mismo origen HTTPS** y una base de datos PostgreSQL. Diseñada para
+probarla **desde el móvil en tu red local (LAN)** y que funcione **sin conexión**.
 
-## Qué hace
+## Arquitectura
 
-- Añadir, editar y borrar notas.
-- **Sin conexión:** las notas se guardan en tu navegador (localStorage) y todo sigue funcionando.
-- **Con conexión:** los cambios se envían solos al servidor (PostgreSQL) y ya no se guardan en el navegador.
-- Al volver la conexión, la sincronización es **automática**: no hay botones de "sincronizar".
+| Pieza      | Tecnología                                                     |
+|------------|----------------------------------------------------------------|
+| `NotesApi` | ASP.NET Core Web API (.NET 10) + EF Core + Npgsql              |
+| `NotesPwa` | Blazor WebAssembly PWA (.NET 10), `dotnet publish` precachea el service worker |
+| `NotesDb`  | PostgreSQL 17 (Docker Compose)                                 |
+| Certificado| PFX autofirmado con **IPAddress 192.168.1.69** como SAN (HTTPS LAN) |
 
-## De qué está hecha
+**Clave de diseño:** la API sirve también el `publish\wwwroot` de la PWA en el
+mismo origen HTTPS (`https://<tu-IP>:5000`). Así:
 
-| Parte | Tecnología |
-|-------|------------|
-| App instalable (frontend) | Blazor WebAssembly, .NET 10 |
-| Servidor (backend) | ASP.NET Core Web API, Entity Framework Core |
-| Base de datos | PostgreSQL (con Docker) |
-| Almacenamiento local | localStorage del navegador |
+- **Un solo certificado** que confiar en el móvil (sin CORS ni mixed-content).
+- El **service worker se registra y precachea** en la primera carga → la PWA
+  funciona **offline** después.
 
-## Cómo ejecutarla
+## Prueba en el móvil (LAN)
 
-Necesitas: .NET 10, Docker Desktop y un navegador moderno.
+1. Enciende el PC y pon en marcha los servicios (ver abajo).
+2. En el móvil abre: **`https://192.168.1.69:5000`**
+   - Como el certificado es autofirmado, el móvil te avisará: **acepta /
+     Continuar** (una sola vez). No hace falta instalar nada más.
+3. La primera carga precachea la PWA. A partir de ahí, cierra el navegador:
+   la app abre **sin conexión** desde el icono/escritorio.
+4. Las notas se guardan en PostgreSQL a través de `/api/notes`.
 
-```bash
-# 1. Levantar la base de datos
+> Si `192.168.1.69` no es tu IP de LAN (cambia por DHCP), regenera el
+> certificado y actualiza la URL:
+> `powershell -ExecutionPolicy Bypass -File tools\gen-cert.ps1`
+> (luego reanuda API + publica la PWA y ajusta `ApiBaseUrl`).
+
+## Puesta en marcha
+
+```powershell
+# 1. Base de datos
 docker compose up -d
 
-# 2. Arrancar el servidor
-dotnet run --project NotesApi
+# 2. API + PWA (sirve todo junto en HTTPS 0.0.0.0:5000)
+dotnet run --project NotesApi -c Release --no-build --urls https://0.0.0.0:5000
 
-# 3. Arrancar la app (en otra terminal)
-dotnet run --project NotesPwa
+# 3. Publicar de nuevo la PWA si cambia el código (precache del SW)
+dotnet publish NotesPwa -c Release -o NotesPwa\bin\Release\net10.0\publish
 ```
 
-Abre `http://localhost:5001`.
+## Configuración relevante
 
-## Probar el modo sin conexión
+- `NotesApi/appsettings.json` → `Kestrel` (cert PFX + contraseña), `Pwa:Root`
+  (publish de la PWA), `Cors:AllowedOrigins`, `ConnectionStrings:NotesDb`.
+- `NotesPwa/wwwroot/appsettings.json` → `ApiBaseUrl` (URL pública de la API).
 
-1. Crea algunas notas normalmente.
-2. Para el servidor (Ctrl+C) o desconecta el wifi.
-3. Crea, edita y borra notas: todo se guarda en el navegador y sigue funcionando.
-4. Vuelve a encender el servidor o la conexión: todo lo que hiciste se sube solo.
+## Scripts
 
-## Ver los datos
-
-- **En el navegador:** F12 → Application → Local Storage → clave `notes`.
-- **En la base de datos:**
-  ```bash
-  docker exec -it notes-postgres psql -U postgres -d notes
-  ```
-  y después:
-  ```sql
-  SELECT "Id", "Title", "Text" FROM "Notes";
-  ```
-
-## Usarla desde otro dispositivo (red local)
-
-```bash
-# Servidor y app accesibles desde tu red
-dotnet run --project NotesApi --urls http://0.0.0.0:5000
-dotnet run --project NotesPwa --urls http://0.0.0.0:5001
-```
-
-Luego, en el archivo `NotesPwa/wwwroot/appsettings.json`, cambia `ApiBaseUrl` a tu IP local (por ejemplo `http://192.168.1.69:5000`) y desde el otro dispositivo entra en `http://TU-IP:5001`.
-
-> Nota: los Service Workers (que permiten instalar la PWA) necesitan HTTPS fuera del `localhost`. En la red local funciona como web app normal con sincronización; para instalarla en otros dispositivos haría falta HTTPS.
-
----
-
-**Versión 1.0.0**
+- `tools/gen-cert.ps1` — genera/regenera el PFX con SAN IP + lo instala en
+  `CurrentUser\My`, exporta `certs/notes-lan.pfx` y `certs/notes-lan.cer`.
+- `certs/` — certificado (PFX + CER) ya generado para `192.168.1.69`.
