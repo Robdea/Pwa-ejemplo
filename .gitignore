@@ -6,3 +6,8 @@ obj/
 *.log
 *.err
 *.pid
+fw-open.ps1
+*.pid
+*pwa.log
+*pwa.err
+
